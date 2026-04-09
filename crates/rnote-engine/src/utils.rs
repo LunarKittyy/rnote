@@ -149,14 +149,29 @@ where
         .sync_all()
         .with_context(|| "Failed to sync the contents and metadata of the temporary file")?;
 
-    // Finally, we persist the temporary file to the target filepath, if a file
-    // preexists at this location, it will be atomically replaced by our new file.
-    let _ = temp_file
-        .persist(filepath)
-        .with_context(|| "Failed to persist the temporary file to the target filepath")?;
-
-    #[cfg(unix)]
+    // On Windows, tempfile's `.persist()` can fall back to a copy+delete when the destination
+    // is locked, which causes the file watcher to observe a real Remove event and incorrectly
+    // detach the document from its save path. Instead we use std::fs::rename directly, which
+    // maps to MoveFileExW with MOVEFILE_REPLACE_EXISTING and does not emit a Remove event.
+    #[cfg(windows)]
     {
+        let temp_path = temp_file.into_temp_path();
+        std::fs::rename(&temp_path, filepath)
+            .with_context(|| "Failed to rename temporary file to target filepath")?;
+        // Disarm the TempPath destructor so it doesn't try to delete the (now-renamed) file.
+        let _ = temp_path.keep()
+            .with_context(|| "Failed to keep (disarm) the temporary file path after rename")?;
+    }
+
+    // On non-Windows platforms, use the standard atomic persist (rename syscall).
+    #[cfg(not(windows))]
+    {
+        // Finally, we persist the temporary file to the target filepath, if a file
+        // preexists at this location, it will be atomically replaced by our new file.
+        let _ = temp_file
+            .persist(filepath)
+            .with_context(|| "Failed to persist the temporary file to the target filepath")?;
+
         // On UNIX systems, we also sync the parent directory after the persist operation.
         // Not required for Windows systems, not possible either (you can't open directories as files in the first place).
         // Note that this might not even be enough, file management on UNIX seems to be a bit of a nightmare.
