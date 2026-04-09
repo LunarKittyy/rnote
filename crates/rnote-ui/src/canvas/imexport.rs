@@ -264,10 +264,12 @@ impl RnCanvas {
         if !skip_set_output_file {
             // We only create/replace the file watcher once we are sure the file was successfully saved.
             self.set_output_file(Some(file.to_owned()));
-            // Required, otherwise `output_file_expect_write` will be stuck on true after saving for the
-            // first time or saving as another filename, until the subsequent save at least.
-            self.set_output_file_expect_write(false);
         }
+        // Always reset after a successful write, regardless of whether the output file path changed.
+        // The watcher's Access(Close(Write)) event may never arrive on some platforms/filesystems
+        // (e.g. Linux with certain filesystems, macOS), so don't rely on it as the sole reset path.
+        // If the watcher does fire the event later, the double-reset is harmless.
+        self.set_output_file_expect_write(false);
         self.set_unsaved_changes(false);
         self.set_save_in_progress(false);
 
